@@ -16,7 +16,8 @@
  * Please tell me the trouble by issue or e-mail.
  * :)
  */
-#pragma once
+#ifndef __SCHEDULED_H_INCLUDED__
+#define __SCHEDULED_H_INCLUDED__
 
 #include <set>
 #include <chrono>
@@ -150,8 +151,8 @@ public:
             workCount = -1;
             data_changed.notify_all();
         }
-        if (work_thread.joinable())
-            work_thread.join();
+        if (work_thread)
+            work_thread->join();
         set.clear();
     }
 
@@ -162,15 +163,21 @@ public:
         delete any;
     }
 
+    template<typename T>
+    static callback callback_cast(T func)
+    {
+        return reinterpret_cast<callback>(func);
+    }
+
 public:
 
     //Schedule Functions
     // schedule_now   - do the task now. A idle worker will start the task at once.
-    // schedule_later - do the task some time later. Task will start after a period of time.
+    // schedule_for - do the task some time later. Task will start after a period of time.
     // schedule_at - do the task at the time. Task will start at the time.
     //Arguments:
     // when:
-    //      in function *_later, it is how long the delay.
+    //      in function *_for, it is how long the delay.
     //      in function *_at, it is the start time.
     // cbTask:
     //      When the time over, the callback function will be called.
@@ -197,10 +204,10 @@ public:
     }
 
     template<typename T, typename T1, typename T2>
-    std::shared_ptr<TaskNode> schedule_later(std::chrono::duration<T1, T2> when,
-                                             callback cbTask,
-                                             T const &data,
-                                             callback cbThrown = nullptr)
+    std::shared_ptr<TaskNode> schedule_for(std::chrono::duration<T1, T2> when,
+                                           callback cbTask,
+                                           T const &data,
+                                           callback cbThrown = nullptr)
     {
         return schedule_at(ClockType::now() + when,
                            cbTask,
@@ -235,10 +242,10 @@ public:
     }
 
     template<typename T, typename T1, typename T2>
-    std::shared_ptr<TaskNode> schedule_later(std::chrono::duration<T1, T2> when,
-                                             callback cbTask,
-                                             T &&data,
-                                             callback cbThrown = nullptr)
+    std::shared_ptr<TaskNode> schedule_for(std::chrono::duration<T1, T2> when,
+                                           callback cbTask,
+                                           T &&data,
+                                           callback cbThrown = nullptr)
     {
         return schedule_at(ClockType::now() + when,
                            cbTask,
@@ -269,11 +276,11 @@ public:
     }
 
     template<typename T1, typename T2>
-    std::shared_ptr<TaskNode> schedule_later(std::chrono::duration<T1, T2> when,
-                                             callback cbTask,
-                                             void *pData = nullptr,
-                                             callback cbClean = nullptr,
-                                             callback cbThrown = nullptr)
+    std::shared_ptr<TaskNode> schedule_for(std::chrono::duration<T1, T2> when,
+                                           callback cbTask,
+                                           void *pData = nullptr,
+                                           callback cbClean = nullptr,
+                                           callback cbThrown = nullptr)
     {
         return schedule_at(ClockType::now() + when, cbTask, pData, cbClean, cbThrown);
     }
@@ -288,7 +295,6 @@ public:
         std::unique_lock<std::mutex> lk(general_lock);
         std::shared_ptr<TaskNode>
                 spTask = std::shared_ptr<TaskNode>(new TaskNode(this, when, cbTask, pData));
-        spTask->cleanCallback = cbClean;
         spTask->throwCallback = cbThrown;
         mset_const_iter iter = set.insert(spTask);
         if (workCount > 0)
@@ -298,12 +304,20 @@ public:
         }
         else
         {
-            work_thread = std::thread(&Scheduled::worker_routine, this, &work_controller);
+            if (work_thread)
+            {
+                if (work_thread->joinable())
+                    work_thread->detach();//...
+                delete work_thread;
+            }
+            work_thread = new std::thread(&Scheduled::worker_routine, this, &work_controller);
         }
+        spTask->cleanCallback = cbClean;
         return spTask;
     }
+
     //remove a task, the implement of TaskNode::cancel
-    bool remove(TaskNode *task)
+    bool remove(TaskNode const*task)
     {
         std::unique_lock<std::mutex> lk(general_lock);
         bool found = false;
@@ -375,7 +389,9 @@ private:
     std::mutex general_lock;
     std::condition_variable data_changed;
     std::multiset<std::shared_ptr<TaskNode>, TaskCompare> set;
-    std::thread work_thread;
+    std::thread *work_thread = nullptr;
     WorkerController work_controller;
     int workCount = 0;
 };
+
+#endif
